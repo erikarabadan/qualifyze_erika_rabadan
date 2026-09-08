@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: stg_sitesdb
+    columns:
+      - name: site_id
+        tests: [unique, not_null]
+      - name: site_name
+        tests: [not_null]
+      - name: address
+        tests: [not_null]
+
+  - name: stg_audits
+    columns:
+      - name: audit_id
+        tests: [unique, not_null]
+      - name: site_name
+        tests: [not_null]
+      - name: site_address
+        tests:
+          - not_null:
+              severity: warn
+      - name: audit_date
+        tests: [not_null]
+
+  - name: stg_eudra_gmp
+    columns:
+      - name: certificate_number
+        tests: [unique, not_null]
+      - name: document_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['GMPC', 'GMPNC']
+      - name: site_name
+        tests: [not_null]
+      - name: address_1
+        tests: [not_null]
+      - name: issue_date
+        tests: [not_null]
+      - name: inspection_end_date
+        tests: [not_null]

@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: audit_site_matches
+    columns:
+      - name: audit_id
+        tests: [unique, not_null]
+      - name: match_method
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['exact_name', 'fuzzy_combined', 'no match found']
+      - name: site_id
+        tests:
+          - relationships:
+              to: ref('stg_sitesdb')
+              field: site_id
+
+  - name: eudra_site_matches
+    columns:
+      - name: certificate_number
+        tests: [unique, not_null]
+      - name: document_type
+        tests:
+          - accepted_values:
+              values: ['GMPC', 'GMPNC']
+      - name: match_method
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['exact_name', 'fuzzy_combined', 'no match found']
+      - name: site_id
+        tests:
+          - relationships:
+              to: ref('stg_sitesdb')
+              field: site_id

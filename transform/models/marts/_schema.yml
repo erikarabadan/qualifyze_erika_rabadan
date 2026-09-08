@@ -1,0 +1,29 @@
+version: 2
+
+models:
+  - name: sites
+    columns:
+      - name: site_id
+        tests: [unique, not_null]
+
+  - name: sites_eudra
+    columns:
+      - name: certificate_number
+        tests: [unique, not_null]
+      - name: site_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('sites')
+              field: site_id
+
+  - name: sites_audits
+    columns:
+      - name: audit_id
+        tests: [unique, not_null]
+      - name: site_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('sites')
+              field: site_id
