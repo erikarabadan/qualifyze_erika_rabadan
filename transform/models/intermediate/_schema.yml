@@ -9,7 +9,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['exact_name', 'fuzzy_combined', 'no match found']
+              values: ['exact_name', 'fuzzy_combined', 'fuzzy_no_city_confirmation', 'no match found']
       - name: site_id
         tests:
           - relationships:
@@ -28,7 +28,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['exact_name', 'fuzzy_combined', 'no match found']
+              values: ['exact_name', 'fuzzy_combined', 'fuzzy_no_city_confirmation', 'no match found']
       - name: site_id
         tests:
           - relationships:

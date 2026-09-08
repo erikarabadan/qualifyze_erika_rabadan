@@ -1,3 +1,5 @@
+{{ config(materialized='table') }}
+
 with eudra_sites as (
 
     select distinct site_id
@@ -28,6 +30,7 @@ quiet_sites as (
 select
     s.site_id,
     s.site_name,
+    s.address,
     s.city,
     s.country,
     s.status,
@@ -46,6 +49,7 @@ union all
 select
     s.site_id,
     s.site_name,
+    s.address,
     s.city,
     s.country,
     s.status,
@@ -64,6 +68,7 @@ union all
 select
     s.site_id,
     s.site_name,
+    s.address,
     s.city,
     s.country,
     s.status,
