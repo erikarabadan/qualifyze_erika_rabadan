@@ -5,6 +5,10 @@ models:
     columns:
       - name: site_id
         tests: [unique, not_null]
+      - name: compliance_status
+        tests:
+          - accepted_values:
+              values: ['compliant', 'non_compliant', 'unknown']
 
   - name: sites_eudra
     columns:

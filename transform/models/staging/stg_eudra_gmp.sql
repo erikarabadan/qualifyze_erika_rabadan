@@ -1,3 +1,5 @@
+{{ config(materialized='table') }}
+
 select
     certificate_number,
     eudragmdp_document_reference_number as document_reference_number,

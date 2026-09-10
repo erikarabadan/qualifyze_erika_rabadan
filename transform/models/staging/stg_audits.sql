@@ -1,3 +1,5 @@
+{{ config(materialized='table') }}
+
 select
     auditid as audit_id,
     auditdate::date as audit_date,
