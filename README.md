@@ -173,6 +173,17 @@ dagster dev -f orchestration/definitions.py
 
 Open http://localhost:3000 and click "Materialize all."
 
+**Troubleshooting:**
+- If `python3 -m venv .venv` gives dbt compatibility errors (dbt requires
+  Python 3.10+), your system's default `python3` may resolve to an older
+  version. Check available versions with `ls /usr/local/bin/python3*`,
+  then create the venv explicitly: `python3.13 -m venv .venv` (or
+  whichever 3.10+ version is available).
+- If pip fails installing `dbt-core-experimental-parser` with a
+  `CERTIFICATE_VERIFY_FAILED` SSL error (common on fresh Python.org
+  installs on Mac): `pip install --upgrade certifi && export
+  SSL_CERT_FILE=$(python -m certifi)`, then retry the install.
+
 **Verify it worked:**
 
 ```
