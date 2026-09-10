@@ -2,23 +2,46 @@
 
 ## Overview
 
-This pipeline ingests EudraGMDP (public EU GMP compliance data), SitesDB (Qualifyze's internal site master), and audit records, resolves them to a single canonical notion of "site," and produces backend-consumable marts answering: which sites are compliant, what documentation and audit history exists per site, and where visibility gaps remain.
+This pipeline ingests EudraGMDP (public EU GMP compliance data), SitesDB (Qualifyze's internal site master), and audit records, resolves them to a single canonical notion of "site," and produces backend-consumable tables answering: which sites are compliant, what documentation and audit history exists per site, and where visibility gaps remain.
 
 ## Assumptions
 
-- We rely on normalized **(name, address)** as a unique site identifier. This is a much stronger guarantee than address alone — validated directly by the Ismaning cluster, where two distinct companies (OPTOPAN, PROTINA) share 3 physical addresses but are correctly disambiguated by name. Two genuinely unrelated companies sharing both an identical registered name and an identical address is not a realistic risk this design needs to guard against.
-- We assume EudraGMDP's `Country` values and SitesDB's `country` values use a consistent naming convention (both full English country names), allowing a direct text join without a country-code crosswalk table.
-- We assume it is normal and expected for a site to have no matched EudraGMDP document, no matched audit, or neither — not an error condition. This shaped `compliance_status = 'unknown'` as a distinct, legitimate state rather than treating zero matches as a data quality failure to be minimized.
+- I rely on normalized **(name, address)** as a unique site identifier. This is a much stronger guarantee than address or name alone — validated directly by the Ismaning cluster, where two distinct companies (OPTOPAN, PROTINA) share 3 physical addresses but are correctly disambiguated by name. Two genuinely unrelated companies sharing both an identical registered name and an identical address is not a realistic risk this design needs to guard against.
+- I assume EudraGMDP's `Country` values and SitesDB's `country` values use a consistent naming convention (both full English country names), allowing a direct text join without a country-code crosswalk table.
+- I assume it is normal and expected for a site to have no matched EudraGMDP document, no matched audit, or neither — not an error condition. This shaped `compliance_status = 'unknown'` as a distinct, legitimate state rather than treating zero matches as a data quality failure to be minimized.
 - **SitesDB duplicate resolution**: downstream consumers are assumed to only care about active (non-deleted) site status, so `stg_sitesdb` filters `is_deleted = false`. A row is otherwise canonical if `newentityreferenceid` is null, plus a `distinct on (name, address)` safety net. Testing surfaced 3 duplicate pairs SitesDB's own dedup mechanism missed entirely (no reference link set on either row) — only distinguishable from their canonical survivor by `isdeleted`, which is why the deleted-row filter matters for correctness, not just scope. Deleted rows remain queryable in `raw.sitesdb` if ever needed.
-- We assume EudraGMDP and Qualifyze audits are independent signals about a site — a site can legitimately have one without the other, and neither implies the other. This is a domain assumption, not provable from the schema alone, though it's consistent with 5 of 8 `unknown`-status sites having audit history despite no EudraGMDP presence.
+- I assume EudraGMDP and audits are independent signals about a site — a site can legitimately have one without the other, and neither implies the other. This is a domain assumption, not provable from the schema alone, though it's consistent with 5 of 8 `unknown`-status sites having audit history despite no EudraGMDP presence.
 - **EudraGMDP's OMS identifier hierarchy was verified, not assumed**: every `OMS Organisation Identifier` uses exactly one `Site Name` string across all its documents, and every `OMS Location Identifier` belongs to exactly one organisation (zero exceptions across 34 organisations, 41 locations). This confirms organisation ≈ company name, location ≈ (company, address) — directly explaining why address alone is unsafe as a join key, and why matching uses the (name, address) composite instead. SitesDB does not model this org/location distinction, which is why an OMS-based join to SitesDB isn't possible at all.
 - **Compliance definition reflects the most recent EudraGMDP document per site (by `issue_date`), not "has any GMPNC ever appeared."** A site is `non_compliant` if its latest document is a GMPNC, `unknown` if it has zero matched documents, else `compliant`. This dataset has no site with both a GMPC and GMPNC, so the distinction can't be validated against real data — but "any NCR ever" would incorrectly and permanently flag a site as non-compliant even after a later re-certifying GMPC.
-- **`compliance_status` is site-level, not scope-level.** GMP certification is typically scoped to specific activities/products. `MIA Number` was checked as a possible scope-identifying field but ruled out: paired same-inspection certificates (e.g. Erlangen, LIT Leibniz, Yusen Logistics) share an identical `MIA Number`, and it's null in 13/45 rows overall. However, **NCRs and GMPCs are structurally different document types**: `MIA Number` is filled for 32/43 GMPCs but 0/2 GMPNCs; `Site NCA Reference` is filled for 19/43 GMPCs but 2/2 GMPNCs — a complete, consistent split at the document-type boundary. This supports NCRs being inherently site-level findings, consistent with computing `compliance_status` at the site level.
-- Some sites have multiple simultaneous certificates (same site, same inspection date, same MIA) with no field distinguishing them beyond the certificate number itself — confirmed by inspecting every column for one such pair (Universitaetsklinikum Erlangen). This remains an unexplained pattern in the source data, not a solved one.
+- **`compliance_status` is site-level.** GMP certification is typically scoped to specific activities/products. `MIA Number` was checked as a possible scope-identifying field but ruled out: paired same-inspection certificates (e.g. Erlangen, LIT Leibniz, Yusen Logistics) share an identical `MIA Number`, and it's null in 13/45 rows overall. However, **NCRs and GMPCs are structurally different document types**: `MIA Number` is filled for 32/43 GMPCs but 0/2 GMPNCs; `Site NCA Reference` is filled for 19/43 GMPCs but 2/2 GMPNCs — a complete, consistent split at the document-type boundary. This supports NCRs being inherently site-level findings, consistent with computing `compliance_status` at the site level.
+- Some sites have multiple simultaneous certificates (same site, same inspection date, same MIA) with no field distinguishing them beyond the certificate number itself — confirmed by inspecting every column for one such pair (Universitaetsklinikum Erlangen). 
 - **Unmatched records are kept, not dropped**: intermediate matching tables retain `no match found` rows for full auditability; marts filter to matched-only rows (fact tables) or include all sites regardless of activity (dimension table), per each table's own grain.
 - **EudraGMDP vs SitesDB coverage gap is expected, not a bug**: of 35 resolved sites, 3 (MediPack France SAS, Benelux Cold Chain BV, Padana Pharma S.p.A.) have zero matched documents or audits. Verified by direct inspection: their countries either have no source records at all (France, Italy), or all same-country records belong to other, geographically distinct sites (Netherlands — Utrecht/Hulst/Geleen, not Amsterdam).
-- **A distinct, more concerning gap type exists beyond the 3 known zero-activity sites**: sites with real EudraGMDP activity that SitesDB has never onboarded at all, invisible to `marts.sites` entirely since there's no row to attach an "unknown" status to. Confirmed example: Yusen Logistics (Benelux) B.V., Hulst, Netherlands — 2 active GMPC certificates in EudraGMDP, zero presence in SitesDB. Detectable only by comparing unmatched EudraGMDP site names directly against SitesDB, not from any mart output.
-- Two source records have incomplete location data (one audit with a null address, one with a null city) — both genuinely incomplete in the source ("Unknown Contract Manufacturer" auditee), not pipeline defects. Matching logic resolves these gracefully via SQL null-propagation; corresponding staging tests are `severity: warn`, not blocking.
+- **Scope**: I'm assuming the unit of interest is site status, not
+  company status.** Matching resolves to individual physical locations
+  (name + address), consistent with EudraGMDP's own `OMS Location
+  Identifier` granularity and SitesDB's row-per-address structure — not
+  `OMS Organisation Identifier` (company-level), which can span multiple
+  addresses. A natural expansion of scope: given a company of interest,
+  verify whether it has EudraGMDP locations not yet represented in
+  SitesDB at all. CSL Plasma Inc. illustrates this concretely — one
+  EudraGMDP location matches a SitesDB site (Dallas), another has no
+  SitesDB presence at all (Spartanburg), a partially-tracked company
+  that goes unflagged under the current per-location scope.
+
+- **Scope is at SitesDB level.** I assumed the scope is only sites
+  already in SitesDB. This leaves out companies with no matching
+  location, and the current design has no visibility into that. Each
+  EudraGMDP document and audit is matched to a specific physical
+  location (name + address) — not to a company as a whole. This has a
+  real effect I found in the data: Yusen Logistics (Benelux) B.V. has 2
+  active EudraGMDP certificates but no site in SitesDB at all, and CSL
+  Plasma Inc. has one location matched to a SitesDB site (Dallas) and
+  one with no match anywhere (Spartanburg). Neither case shows up in
+  `marts.sites`, since there's no SitesDB row to attach a status to.
+  Widening scope to the company level would fix this — showing not just
+  the status of sites already tracked, but which other locations a
+  company has that Qualifyze hasn't onboarded yet.
 
 ## Architecture
 
@@ -85,9 +108,7 @@ fail-fast so a failing test blocks downstream rebuilds.
 
 **`compliance_status` is a 3-value status derived from the most recent document, not a boolean derived from "any NCR ever."** Computed via a single window-function pass — `row_number() over (partition by site_id order by issue_date desc)` — then aggregated with `max(case when rn = 1 then ... end)` to pull the top-ranked document's type/date alongside `count()`/`count() filter (...)` for volume, all in one scan.
 
-**Match confidence scores (`name_score`, `address_score`) are exposed directly in `intermediate` and `marts` tables.** Deliberate for this exercise — scores were essential for manual validation (e.g. confirming a fuzzy match between "PROTINA Pharmazeutische GmbH" and "PROTINA Pharmazeutische GmbH & Co. KG" was correct via its 0.81/1.0 component scores). For a production API, I'd exclude these from the primary contract and expose them only via a separate audit/debug endpoint.
-
-**Materialization: table everywhere, for simplicity.** All staging, intermediate, and mart models are dbt tables, not views. `stg_sitesdb` (dedup logic) and both `*_sites_matches` models (trigram similarity + window functions) are computationally expensive and referenced by multiple downstream models within a single run, so materializing avoids redundant recomputation. `stg_audits`/`stg_eudra_gmp` don't strictly need table materialization (simple casts, referenced once each), but were kept consistent with the rest for simplicity rather than mixing strategies per-model. Run cadence is currently manual (`dbt build`, or Dagster's "Materialize all"); a daily schedule is defined but not activated (see Known Limitations).
+**Match confidence scores (`name_score`, `address_score`) are exposed directly in `intermediate` and `marts` tables.** Deliberate for this exercise — scores were essential for manual validation (e.g. confirming a fuzzy match between "PROTINA Pharmazeutische GmbH" and "PROTINA Pharmazeutische GmbH & Co. KG" was correct via its 0.81/1.0 component scores). For a production API, I would exclude these from the primary contract and expose them only via a separate audit/debug endpoint.
 
 ## Schema contract
 
@@ -144,8 +165,15 @@ Answers "show me everything for site X" in one query, no joins required.
 
 **Requirements:** Docker Desktop, Python 3.10+.
 
+**Note:** these instructions assume macOS/Linux (bash/zsh). Windows users should use WSL or Git Bash; some commands (venv activation, the `psql` redirect) differ on native PowerShell/cmd.
+
+**If Docker Desktop or Python 3.10+ aren't already installed:**
+- Docker Desktop: https://www.docker.com/products/docker-desktop
+- Python 3.10+: `brew install python@3.13` (Mac, via Homebrew) or download from https://python.org. Verify with `python3.13 --version` (substitute whichever 3.10+ version you installed in the commands below).
+
 1. Clone the repo, `cd` into it.
 2. Start Postgres: `docker compose up -d`
+   - If this fails or hangs, port 5432 may already be in use by another local Postgres instance — stop it first, or change the host port mapping in `docker-compose.yml`.
 3. Create the raw schema: `docker exec -i qualifyze_pg psql -U qualifyze -d qualifyze < sql/raw_schema.sql`
 4. Set up Python (use an explicit 3.10+ interpreter — plain `python3` may resolve to an older, incompatible version):
 
@@ -165,7 +193,7 @@ export DBT_PROFILES_DIR="$(pwd)"
 dbt build
 ```
 
-8. (Optional) Explore orchestration via Dagster:
+8. (Optional) Explore orchestration via Dagster. Run this from the **project root**, not from inside `transform/` — if you're still there from step 7, `cd ..` first:
 
 ```
 pip install dagster dagster-webserver
@@ -178,6 +206,7 @@ Open http://localhost:3000 and click "Materialize all."
 - If `python3.13` (or another 3.10+ version) isn't available, check what's installed with `ls /usr/local/bin/python3*` and substitute accordingly. Plain `python3 -m venv .venv` may silently create a venv on an older, dbt-incompatible Python version.
 - If pip fails installing `dbt-core-experimental-parser` with a `CERTIFICATE_VERIFY_FAILED` SSL error (common on fresh Python.org installs on Mac): `pip install --upgrade certifi && export SSL_CERT_FILE=$(python -m certifi)`, then retry the install.
 - If dbt reports `Could not find profile named 'transform'`, confirm `DBT_PROFILES_DIR` is set in your current terminal session (`echo $DBT_PROFILES_DIR`) — it does not persist across terminal restarts and must be re-exported each new session, or set permanently in your shell profile.
+- `requirements.txt` does not pin exact versions; installs have resolved to slightly different dbt-core versions (1.10.x–1.12.x) across test runs, all verified working. If a future dbt release introduces a breaking change, pin versions explicitly as a fallback.
 
 **Verify it worked:**
 
@@ -185,6 +214,8 @@ Open http://localhost:3000 and click "Materialize all."
 select count(*) from raw.sitesdb;   -- 49
 select count(*) from marts.sites;   -- 35
 ```
+
+Run these (and the example queries below) via `docker exec -it qualifyze_pg psql -U qualifyze -d qualifyze` (opens an interactive session — paste a query, press Enter), or any Postgres client such as SQLTools in VS Code, connecting to `localhost:5432` / user `qualifyze` / password `qualifyze` / database `qualifyze`.
 
 **A few example queries to confirm the pipeline produces meaningful output, not just row counts (all verified against live data, including a full clean-clone rerun):**
 
@@ -227,9 +258,8 @@ Expect 3 rows: MediPack France SAS, Benelux Cold Chain BV, Padana Pharma S.p.A. 
 ## Ideas to improve and scale the solution
 
 - **NCR promptness via a two-speed pipeline.** Add a second, cheap, frequently-triggered path specifically for new/changed EudraGMDP records, alongside the existing daily full-reconciliation job: detection via a Dagster sensor polling `Last Updated Date` (or ideally a webhook, not available from a static export), append/upsert ingestion instead of truncate+reload, and `materialized='incremental'` matching models so only new documents get scored. Trade-off: incremental matching can't guarantee a previously-unmatched document gets re-evaluated when a new site is later added — the daily full-reconciliation job closes that gap.
-- **Match history / audit trail**: a `dbt snapshot` on the mart layer, or an append-only match-history table keyed by (document_id, run_date), to preserve "what did we believe on date X" — meaningful for a compliance dataset.
+- **Match history / audit trail**: a `dbt snapshot` on the mart layer, or an append-only match-history table keyed by (document_id, run_date), to preserve "what was believed to be true on date X" — meaningful for a compliance dataset.
 - **Incremental materialization at scale**: move the document/audit-volume-scaling layers (staging + matching) to `materialized='incremental'`. The site dimension and aggregate marts can stay full-rebuild indefinitely, since their size is bounded by site count, which grows far more slowly than document/audit count.
-- **Fuzzy matching index**: a `gin` trigram index (`gin_trgm_ops` on normalized name/address columns) as the next lever once the city+country-scoped cross join stops being cheap at volume.
 - **Bulk load path**: convert to CSV and use Postgres's `COPY` instead of pandas' `to_sql` — 1-2 orders of magnitude faster at scale.
 - **Source freshness checks** via `dbt source freshness`.
 - **Move match confidence scores off the primary schema contract**, exposing them only via a separate audit/debug endpoint in production.
