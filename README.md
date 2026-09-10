@@ -147,20 +147,21 @@ Answers "show me everything for site X" in one query, no joins required.
 1. Clone the repo, `cd` into it.
 2. Start Postgres: `docker compose up -d`
 3. Create the raw schema: `docker exec -i qualifyze_pg psql -U qualifyze -d qualifyze < sql/raw_schema.sql`
-4. Set up Python (run each line in order):
+4. Set up Python (use an explicit 3.10+ interpreter — plain `python3` may resolve to an older, incompatible version):
 
 ```
-python3 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 5. Load raw data: `python ingestion/load_raw.py`
 6. Enable the trigram extension (one-time): `docker exec -it qualifyze_pg psql -U qualifyze -d qualifyze -c "create extension if not exists pg_trgm;"`
-7. Run the transformation pipeline:
+7. Run the transformation pipeline. `transform/profiles.yml` is committed to this repo (dev-only, throwaway credentials — see Known Limitations), so no manual dbt profile setup is needed; `DBT_PROFILES_DIR` just needs to point dbt at it:
 
 ```
 cd transform
+export DBT_PROFILES_DIR="$(pwd)"
 dbt build
 ```
 
@@ -174,15 +175,9 @@ dagster dev -f orchestration/definitions.py
 Open http://localhost:3000 and click "Materialize all."
 
 **Troubleshooting:**
-- If `python3 -m venv .venv` gives dbt compatibility errors (dbt requires
-  Python 3.10+), your system's default `python3` may resolve to an older
-  version. Check available versions with `ls /usr/local/bin/python3*`,
-  then create the venv explicitly: `python3.13 -m venv .venv` (or
-  whichever 3.10+ version is available).
-- If pip fails installing `dbt-core-experimental-parser` with a
-  `CERTIFICATE_VERIFY_FAILED` SSL error (common on fresh Python.org
-  installs on Mac): `pip install --upgrade certifi && export
-  SSL_CERT_FILE=$(python -m certifi)`, then retry the install.
+- If `python3.13` (or another 3.10+ version) isn't available, check what's installed with `ls /usr/local/bin/python3*` and substitute accordingly. Plain `python3 -m venv .venv` may silently create a venv on an older, dbt-incompatible Python version.
+- If pip fails installing `dbt-core-experimental-parser` with a `CERTIFICATE_VERIFY_FAILED` SSL error (common on fresh Python.org installs on Mac): `pip install --upgrade certifi && export SSL_CERT_FILE=$(python -m certifi)`, then retry the install.
+- If dbt reports `Could not find profile named 'transform'`, confirm `DBT_PROFILES_DIR` is set in your current terminal session (`echo $DBT_PROFILES_DIR`) — it does not persist across terminal restarts and must be re-exported each new session, or set permanently in your shell profile.
 
 **Verify it worked:**
 
@@ -191,7 +186,7 @@ select count(*) from raw.sitesdb;   -- 49
 select count(*) from marts.sites;   -- 35
 ```
 
-**A few example queries to confirm the pipeline produces meaningful output, not just row counts (all verified against live data):**
+**A few example queries to confirm the pipeline produces meaningful output, not just row counts (all verified against live data, including a full clean-clone rerun):**
 
 List of non-compliant sites:
 ```sql
@@ -226,7 +221,7 @@ Expect 3 rows: MediPack France SAS, Benelux Cold Chain BV, Padana Pharma S.p.A. 
 - **No source freshness checks** — nothing currently surfaces a silently stale `raw.eudra_gmp`.
 - **Match confidence scores are exposed directly in marts**, which a production consumer-facing API likely shouldn't require.
 - **Dagster schedule defined but not activated**; orchestration not deployed anywhere.
-- **Credentials are plaintext in `docker-compose.yml`/`profiles.yml`**.
+- **`transform/profiles.yml` is committed to the repo** for onboarding convenience — acceptable here since credentials are throwaway local dev values (`qualifyze`/`qualifyze`, localhost-only). A real deployment would never commit this file; it would come from a secrets manager, consistent with the same principle applying to `docker-compose.yml` credentials.
 - **Daily batch cadence is a genuine mismatch for the brief's NCR-promptness requirement** — see Ideas to Scale for the proposed fix.
 
 ## Ideas to improve and scale the solution
